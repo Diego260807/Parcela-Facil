@@ -10,6 +10,17 @@ export interface Usuario {
   rendaMensal: number;
   tetoComprometimentoPercentual: number; // ex: 30% da renda ou limite total
   criadoEm: string;
+  avatarCor?: string;
+}
+
+export interface UsuarioComCredenciais extends Usuario {
+  senhaHash: string;
+}
+
+export interface SessaoAuth {
+  token: string;
+  usuario: Usuario;
+  expiraEm: string;
 }
 
 export type BandeiraCartao = 'mastercard' | 'visa' | 'elo' | 'amex' | 'hipercard' | 'outro';

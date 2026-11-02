@@ -29,6 +29,7 @@ interface DashboardViewProps {
   curvaDivida: { mes: string; dividaRestante: number; valorMes: number }[];
   onOpenNovaCompra: () => void;
   onExportPDF: (projecao?: ProjecaoMes) => void;
+  onVerFatura: (mesAno: string) => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -40,6 +41,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   curvaDivida,
   onOpenNovaCompra,
   onExportPDF,
+  onVerFatura,
 }) => {
   const [mesesHorizonte, setMesesHorizonte] = useState<number>(6); // 3, 6 ou 12 meses
   const [selectedMesIndex, setSelectedMesIndex] = useState<number>(0);
@@ -115,23 +117,30 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* 4 Cards de Métricas Principais */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {/* Card 1: Fatura do Mês Atual */}
-        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm hover:shadow-md transition-shadow">
+        {/* Card 1: Fatura do Mês Atual (Clicável) */}
+        <div
+          onClick={() => onVerFatura(mesAtual.mesAno)}
+          className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-sm hover:shadow-md hover:border-indigo-400 hover:scale-[1.01] transition-all cursor-pointer group"
+          title={`Clique para abrir os detalhes da fatura de ${mesAtual.mesFormatado}`}
+        >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide group-hover:text-indigo-600 transition-colors">
               Fatura de {mesAtual.mesFormatado}
             </span>
-            <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600">
+            <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
               <Calendar className="h-4 w-4" />
             </div>
           </div>
           <div className="mt-2">
-            <h4 className="text-2xl font-black text-slate-900 tracking-tight">
+            <h4 className="text-2xl font-black text-slate-900 tracking-tight group-hover:text-indigo-700 transition-colors">
               {formatarMoeda(mesAtual.totalFatura)}
             </h4>
-            <p className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
-              <span>{mesAtual.parcelas.length} parcelas ativas este mês</span>
-            </p>
+            <div className="flex items-center justify-between text-xs text-slate-500 mt-1">
+              <span>{mesAtual.parcelas.length} parcelas ativas</span>
+              <span className="text-[11px] font-bold text-indigo-600 group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5">
+                Ver fatura &rarr;
+              </span>
+            </div>
           </div>
         </div>
 
@@ -291,23 +300,33 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* Selected Month Banner */}
-        <div className="mt-4 p-3.5 bg-slate-50 rounded-xl flex items-center justify-between text-xs text-slate-600">
+        {/* Selected Month Banner with Direct Invoice Access */}
+        <div className="mt-4 p-3.5 bg-slate-50 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-slate-600">
           <div className="flex items-center gap-2">
             <Info className="h-4 w-4 text-indigo-600 shrink-0" />
             <span>
-              Mês selecionado: <strong>{mesVisualizado.mesFormatado}</strong> (Total:{' '}
+              Fatura em foco: <strong>{mesVisualizado.mesFormatado}</strong> (Total:{' '}
               <strong className="text-indigo-600">{formatarMoeda(mesVisualizado.totalFatura)}</strong>)
             </span>
           </div>
 
-          <button
-            onClick={() => onExportPDF(mesVisualizado)}
-            className="flex items-center gap-1.5 text-xs font-medium text-slate-700 hover:text-indigo-600 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 shadow-2xs transition-colors"
-          >
-            <Download className="h-3.5 w-3.5 text-rose-500" />
-            <span>PDF Desta Fatura</span>
-          </button>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              onClick={() => onVerFatura(mesVisualizado.mesAno)}
+              className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 rounded-lg shadow-xs transition-colors"
+            >
+              <span>Abrir Fatura de {mesVisualizado.mesFormatado.split(' ')[0]}</span>
+              <ArrowUpRight className="h-3.5 w-3.5" />
+            </button>
+
+            <button
+              onClick={() => onExportPDF(mesVisualizado)}
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-700 hover:text-indigo-600 bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 shadow-2xs transition-colors"
+            >
+              <Download className="h-3.5 w-3.5 text-rose-500" />
+              <span>PDF</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -435,9 +454,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               Detalhamento de cada parcela que compõe esta fatura
             </p>
           </div>
-          <span className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg">
-            {mesVisualizado.parcelas.length} itens
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg">
+              {mesVisualizado.parcelas.length} itens
+            </span>
+            <button
+              onClick={() => onVerFatura(mesVisualizado.mesAno)}
+              className="flex items-center gap-1.5 px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-colors"
+            >
+              <span>Ver Fatura Completa</span>
+              <ArrowUpRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
 
         {mesVisualizado.parcelas.length === 0 ? (

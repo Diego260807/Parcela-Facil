@@ -4,16 +4,17 @@
  */
 
 import React from 'react';
-import { Menu, Plus, FileSpreadsheet, FileText, Sparkles, CreditCard, Code2 } from 'lucide-react';
+import { Menu, Plus, FileSpreadsheet, FileText, Sparkles, CreditCard, Code2, LogOut, Layers } from 'lucide-react';
 import { ActiveTab } from './Sidebar';
-import { RecomendacaoCartao } from '../types/finance';
+import { RecomendacaoCartao, Usuario } from '../types/finance';
 
 interface HeaderProps {
   activeTab: ActiveTab;
   setMobileOpen: (open: boolean) => void;
+  usuario: Usuario;
+  onLogout: () => void;
   onOpenNovaCompra: () => void;
   onOpenNovoCartao: () => void;
-  onOpenEspecificacao: () => void;
   onExportExcel: () => void;
   onExportPDF: () => void;
   melhorCartaoHoje?: RecomendacaoCartao;
@@ -22,9 +23,10 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setMobileOpen,
+  usuario,
+  onLogout,
   onOpenNovaCompra,
   onOpenNovoCartao,
-  onOpenEspecificacao,
   onExportExcel,
   onExportPDF,
   melhorCartaoHoje,
@@ -108,15 +110,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="hidden lg:inline">Fatura PDF</span>
           </button>
 
-          {/* Docs / Specification shortcut */}
-          <button
-            onClick={onOpenEspecificacao}
-            title="Ver Especificação Técnica & DDL"
-            className="hidden sm:flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-xl transition-all active:scale-95"
-          >
-            <Code2 className="h-4 w-4 text-indigo-600" />
-            <span className="hidden xl:inline">Arquitetura</span>
-          </button>
+
 
           {activeTab === 'cartoes' ? (
             <button
@@ -135,6 +129,28 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Nova Compra</span>
             </button>
           )}
+
+          {/* User profile with quick logout on mobile / small screens */}
+          <div className="flex items-center pl-1 sm:pl-2 border-l border-slate-200">
+            <button
+              onClick={onLogout}
+              title={`Conectado como ${usuario.nome}. Clique para Sair`}
+              className="flex items-center gap-2 p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl hover:bg-rose-50 text-slate-600 hover:text-rose-600 border border-transparent hover:border-rose-200 transition-colors"
+            >
+              <div
+                className="h-7 w-7 rounded-full text-white text-[10px] font-bold flex items-center justify-center shrink-0 shadow-xs"
+                style={{ backgroundColor: usuario.avatarCor || '#6366F1' }}
+              >
+                {usuario.nome
+                  .split(' ')
+                  .map((n) => n[0])
+                  .slice(0, 2)
+                  .join('')
+                  .toUpperCase()}
+              </div>
+              <LogOut className="h-3.5 w-3.5 text-slate-400 group-hover:text-rose-500" />
+            </button>
+          </div>
         </div>
       </div>
     </header>

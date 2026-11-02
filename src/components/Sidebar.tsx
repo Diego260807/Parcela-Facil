@@ -15,7 +15,11 @@ import {
   X,
   PlusCircle,
   Sparkles,
+  LogOut,
+  Layers,
 } from 'lucide-react';
+import { Usuario } from '../types/finance';
+import { formatarMoeda } from '../services/installmentEngine';
 
 export type ActiveTab = 'dashboard' | 'cartoes' | 'compras' | 'simulador';
 
@@ -24,8 +28,9 @@ interface SidebarProps {
   setActiveTab: (tab: ActiveTab) => void;
   mobileOpen: boolean;
   setMobileOpen: (open: boolean) => void;
+  usuario: Usuario;
+  onLogout: () => void;
   onOpenNovaCompra: () => void;
-  onOpenEspecificacao: () => void;
   onExportExcel: () => void;
   onExportPDF: () => void;
 }
@@ -35,8 +40,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setActiveTab,
   mobileOpen,
   setMobileOpen,
+  usuario,
+  onLogout,
   onOpenNovaCompra,
-  onOpenEspecificacao,
   onExportExcel,
   onExportPDF,
 }) => {
@@ -195,30 +201,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* Bottom Profile / Dev Docs */}
+        {/* Bottom Profile */}
         <div className="p-4 border-t border-slate-800/80 bg-slate-950/40">
-          <button
-            onClick={() => {
-              onOpenEspecificacao();
-              setMobileOpen(false);
-            }}
-            className="w-full flex items-center justify-between p-2.5 rounded-lg bg-slate-800/50 hover:bg-slate-800 text-slate-300 hover:text-white transition-colors text-xs border border-slate-700/50 mb-3"
-          >
-            <span className="flex items-center gap-2">
-              <Code2 className="h-4 w-4 text-emerald-400" />
-              <span>Especificação & DDL SQL</span>
-            </span>
-            <span className="text-[10px] bg-slate-700 px-1.5 py-0.5 rounded text-slate-300">Docs</span>
-          </button>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div
+                className="h-9 w-9 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0 shadow-sm"
+                style={{ backgroundColor: usuario.avatarCor || '#6366F1' }}
+              >
+                {usuario.nome
+                  .split(' ')
+                  .map((n) => n[0])
+                  .slice(0, 2)
+                  .join('')
+                  .toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-white truncate">{usuario.nome}</p>
+                <p className="text-[10px] text-slate-400 truncate">
+                  Renda: {formatarMoeda(usuario.rendaMensal)}
+                </p>
+              </div>
+            </div>
 
-          <div className="flex items-center gap-3 pt-2">
-            <div className="h-9 w-9 rounded-full bg-indigo-600/30 border border-indigo-400/40 flex items-center justify-center text-sm font-semibold text-indigo-300">
-              DN
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-white truncate">Diego Nascimento</p>
-              <p className="text-[11px] text-slate-400 truncate">Renda: R$ 8.500,00</p>
-            </div>
+            <button
+              onClick={onLogout}
+              title="Sair da Conta (Logout)"
+              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition-colors shrink-0"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
           </div>
         </div>
       </aside>
