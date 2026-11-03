@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -16,12 +17,18 @@ import { DetalhesFaturaModal } from './components/modals/DetalhesFaturaModal';
 import { AuthView } from './components/auth/AuthView';
 import { INITIAL_CATEGORIES } from './data/mockData';
 import { Cartao, Compra, ProjecaoMes, Usuario } from './types/finance';
+
 import {
   calcularProjecaoMensal,
   calcularCurvaReducaoDivida,
   obterMelhorCartaoParaHoje,
 } from './services/installmentEngine';
-import { exportarRelatorioExcel, exportarFaturaPDF } from './services/exportService';
+
+import {
+  exportarRelatorioExcel,
+  exportarFaturaPDF,
+} from './services/exportService';
+
 import {
   carregarCartoesDoUsuario,
   carregarComprasDoUsuario,
@@ -31,55 +38,87 @@ import {
   salvarComprasDoUsuario,
 } from './services/authService';
 
+import {
+  carregarPagamentosDoUsuario,
+  marcarParcelaComoPaga,
+  desfazerPagamentoParcela,
+  PagamentoParcela,
+} from './services/paymentService';
+
 export default function App() {
   // Authentication State
-  const [usuarioAtivo, setUsuarioAtivo] = useState<Usuario | null>(() => obterSessaoAtiva());
+  const [usuarioAtivo, setUsuarioAtivo] = useState<Usuario | null>(
+    () => obterSessaoAtiva()
+  );
 
   // Navigation State
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Categories (System global)
+  // Categories
   const [categorias] = useState(INITIAL_CATEGORIES);
 
-  // Entities State isolated by User ID
+  // User data
   const [cartoes, setCartoes] = useState<Cartao[]>([]);
   const [compras, setCompras] = useState<Compra[]>([]);
+  const [pagamentos, setPagamentos] = useState<PagamentoParcela[]>([]);
+
+  // Identifies which user owns the data currently loaded.
+  const [dadosCarregadosParaUsuario, setDadosCarregadosParaUsuario] =
+    useState<string | null>(null);
 
   // Modals state
   const [isNovaCompraOpen, setIsNovaCompraOpen] = useState(false);
-  const [novaCompraInitialMode, setNovaCompraInitialMode] = useState<'manual' | 'ocr'>('manual');
+  const [novaCompraInitialMode, setNovaCompraInitialMode] =
+    useState<'manual' | 'ocr'>('manual');
   const [isNovoCartaoOpen, setIsNovoCartaoOpen] = useState(false);
   const [mesFaturaAberta, setMesFaturaAberta] = useState<string | null>(null);
 
-  // Load user data whenever active user changes
+  // Load data whenever the active user changes.
   useEffect(() => {
-    if (usuarioAtivo) {
-      const cards = carregarCartoesDoUsuario(usuarioAtivo.id);
-      const purchases = carregarComprasDoUsuario(usuarioAtivo.id);
-      setCartoes(cards);
-      setCompras(purchases);
-    } else {
+    if (!usuarioAtivo) {
+      setDadosCarregadosParaUsuario(null);
       setCartoes([]);
       setCompras([]);
+      setPagamentos([]);
+      return;
     }
+
+    const userId = usuarioAtivo.id;
+
+    // Prevent saving data before the new user's information is loaded.
+    setDadosCarregadosParaUsuario(null);
+
+    const cards = carregarCartoesDoUsuario(userId);
+    const purchases = carregarComprasDoUsuario(userId);
+    const payments = carregarPagamentosDoUsuario(userId);
+
+    setCartoes(cards);
+    setCompras(purchases);
+    setPagamentos(payments);
+
+    setDadosCarregadosParaUsuario(userId);
   }, [usuarioAtivo]);
 
-  // Persist cards whenever updated
+  // Persist cards.
   useEffect(() => {
-    if (usuarioAtivo && cartoes.length >= 0) {
-      salvarCartoesDoUsuario(usuarioAtivo.id, cartoes);
+    if (!usuarioAtivo || dadosCarregadosParaUsuario !== usuarioAtivo.id) {
+      return;
     }
-  }, [cartoes, usuarioAtivo]);
 
-  // Persist purchases whenever updated
+    salvarCartoesDoUsuario(usuarioAtivo.id, cartoes);
+  }, [cartoes, usuarioAtivo, dadosCarregadosParaUsuario]);
+
+  // Persist purchases.
   useEffect(() => {
-    if (usuarioAtivo && compras.length >= 0) {
-      salvarComprasDoUsuario(usuarioAtivo.id, compras);
+    if (!usuarioAtivo || dadosCarregadosParaUsuario !== usuarioAtivo.id) {
+      return;
     }
-  }, [compras, usuarioAtivo]);
 
-  // Financial Calculations via Core Engine
+    salvarComprasDoUsuario(usuarioAtivo.id, compras);
+  }, [compras, usuarioAtivo, dadosCarregadosParaUsuario]);
+
+  // Financial calculations.
   const projecoes: ProjecaoMes[] = useMemo(() => {
     return calcularProjecaoMensal(cartoes, compras, 12);
   }, [cartoes, compras]);
@@ -94,7 +133,7 @@ export default function App() {
 
   const melhorCartaoHoje = recomendacoesCartao[0];
 
-  // Auth Handlers
+  // Authentication handlers.
   const handleLoginSucesso = (usuario: Usuario) => {
     setUsuarioAtivo(usuario);
     setActiveTab('dashboard');
@@ -104,64 +143,122 @@ export default function App() {
     if (confirm('Deseja realmente sair da sua conta?')) {
       fazerLogout();
       setUsuarioAtivo(null);
+      setActiveTab('dashboard');
     }
   };
 
-  // Handlers for Add/Delete
-  const handleSalvarCompra = (novaCompra: Omit<Compra, 'id' | 'criadoEm'>) => {
+  // Payment handlers.
+  const handleMarcarParcelaPaga = (
+    compraId: string,
+    numeroParcela: number,
+    valor: number
+  ) => {
+    if (!usuarioAtivo) return;
+
+    const hoje = new Date();
+
+    const dataPagamento = [
+      hoje.getFullYear(),
+      String(hoje.getMonth() + 1).padStart(2, '0'),
+      String(hoje.getDate()).padStart(2, '0'),
+    ].join('-');
+
+    const atualizados = marcarParcelaComoPaga(
+      usuarioAtivo.id,
+      compraId,
+      numeroParcela,
+      valor,
+      dataPagamento
+    );
+
+    setPagamentos(atualizados);
+  };
+
+  const handleDesfazerPagamento = (
+    compraId: string,
+    numeroParcela: number
+  ) => {
+    if (!usuarioAtivo) return;
+
+    const atualizados = desfazerPagamentoParcela(
+      usuarioAtivo.id,
+      compraId,
+      numeroParcela
+    );
+
+    setPagamentos(atualizados);
+  };
+
+  // Purchase handlers.
+  const handleSalvarCompra = (
+    novaCompra: Omit<Compra, 'id' | 'criadoEm'>
+  ) => {
     const compraCriada: Compra = {
       ...novaCompra,
       id: `compra-${Date.now()}`,
       criadoEm: new Date().toISOString(),
     };
+
     setCompras((prev) => [compraCriada, ...prev]);
   };
 
   const handleDeleteCompra = (compraId: string) => {
-    if (confirm('Deseja realmente remover esta compra e suas respectivas parcelas?')) {
+    if (
+      confirm(
+        'Deseja realmente remover esta compra e suas respectivas parcelas?'
+      )
+    ) {
       setCompras((prev) => prev.filter((c) => c.id !== compraId));
     }
   };
 
+  // Card handlers.
   const handleSalvarCartao = (novoCartao: Omit<Cartao, 'id'>) => {
     const cartaoCriado: Cartao = {
       ...novoCartao,
       id: `card-${Date.now()}`,
     };
+
     setCartoes((prev) => [...prev, cartaoCriado]);
   };
 
   const handleDeleteCartao = (cartaoId: string) => {
-    if (confirm('Deseja realmente remover este cartão? As compras associadas serão mantidas.')) {
+    if (
+      confirm(
+        'Deseja realmente remover este cartão? As compras associadas serão mantidas.'
+      )
+    ) {
       setCartoes((prev) => prev.filter((c) => c.id !== cartaoId));
     }
   };
 
-  // Export handlers
+  // Export handlers.
   const handleExportExcel = () => {
     exportarRelatorioExcel(cartoes, compras, projecoes);
   };
 
   const handleExportPDF = (projecaoAlvo?: ProjecaoMes) => {
     const proj = projecaoAlvo || projecoes[0];
+
     if (proj) {
       exportarFaturaPDF(proj, cartoes);
     }
   };
 
-  const handleOpenNovaCompraWithMode = (mode: 'manual' | 'ocr' = 'manual') => {
+  const handleOpenNovaCompraWithMode = (
+    mode: 'manual' | 'ocr' = 'manual'
+  ) => {
     setNovaCompraInitialMode(mode);
     setIsNovaCompraOpen(true);
   };
 
-  // If user is not logged in, render the Auth View
+  // Authentication screen.
   if (!usuarioAtivo) {
     return <AuthView onLoginSucesso={handleLoginSucesso} />;
   }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex font-sans antialiased selection:bg-indigo-500 selection:text-white">
-      {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -174,9 +271,7 @@ export default function App() {
         onExportPDF={() => handleExportPDF()}
       />
 
-      {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 lg:pl-72">
-        {/* Sticky Header */}
         <Header
           activeTab={activeTab}
           setMobileOpen={setMobileOpen}
@@ -189,7 +284,6 @@ export default function App() {
           melhorCartaoHoje={melhorCartaoHoje}
         />
 
-        {/* View Router */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
           {activeTab === 'dashboard' && (
             <DashboardView
@@ -197,9 +291,12 @@ export default function App() {
               cartoes={cartoes}
               compras={compras}
               projecoes={projecoes}
+              pagamentos={pagamentos}
               melhorCartaoHoje={melhorCartaoHoje}
               curvaDivida={curvaDivida}
-              onOpenNovaCompra={() => handleOpenNovaCompraWithMode('manual')}
+              onOpenNovaCompra={() =>
+                handleOpenNovaCompraWithMode('manual')
+              }
               onExportPDF={handleExportPDF}
               onVerFatura={(mesAno) => setMesFaturaAberta(mesAno)}
             />
@@ -230,12 +327,12 @@ export default function App() {
               compras={compras}
               projecoes={projecoes}
               usuario={usuarioAtivo}
+              pagamentos={pagamentos}
             />
           )}
         </main>
       </div>
 
-      {/* Modals */}
       <NovaCompraModal
         isOpen={isNovaCompraOpen}
         onClose={() => setIsNovaCompraOpen(false)}
@@ -251,13 +348,17 @@ export default function App() {
         onSalvarCartao={handleSalvarCartao}
       />
 
-      {/* Interactive Invoice Details Modal */}
       <DetalhesFaturaModal
         isOpen={!!mesFaturaAberta}
         onClose={() => setMesFaturaAberta(null)}
-        mesAnoSelecionado={mesFaturaAberta || projecoes[0]?.mesAno || '2026-11'}
+        mesAnoSelecionado={
+          mesFaturaAberta || projecoes[0]?.mesAno || '2026-11'
+        }
         projecoes={projecoes}
         cartoes={cartoes}
+        pagamentos={pagamentos}
+        onMarcarParcelaPaga={handleMarcarParcelaPaga}
+        onDesfazerPagamento={handleDesfazerPagamento}
         onExportarPDF={handleExportPDF}
         onTrocarMes={(novoMesAno) => setMesFaturaAberta(novoMesAno)}
         onNovaCompra={() => handleOpenNovaCompraWithMode('manual')}
