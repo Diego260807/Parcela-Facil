@@ -1,0 +1,6 @@
+{
+  "name": "ParcelaFácil - Gestão e Projeção de Parcelas no Cartão",
+  "description": "Aplicativo inteligente para controle de compras parceladas, projeção de faturas futuras, simulador de crédito e leitura de comprovantes com IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
