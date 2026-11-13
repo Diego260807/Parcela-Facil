@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -8,16 +9,19 @@ import {
   X,
   Sparkles,
   Upload,
-  Calendar,
   CreditCard,
   ShoppingBag,
-  Check,
   AlertCircle,
   Loader2,
   FileText,
 } from 'lucide-react';
+
 import { Cartao, Categoria, Compra } from '../../types/finance';
-import { calcularPrimeiraFatura, formatarMoeda } from '../../services/installmentEngine';
+import {
+  calcularPrimeiraFatura,
+  formatarMoeda,
+} from '../../services/installmentEngine';
+import { supabase } from '../../lib/supabase';
 
 interface NovaCompraModalProps {
   isOpen: boolean;
@@ -38,7 +42,7 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'manual' | 'ocr'>(initialMode);
 
-  // Form Fields
+  // Campos do formulário
   const [descricao, setDescricao] = useState('');
   const [estabelecimento, setEstabelecimento] = useState('');
   const [categoriaId, setCategoriaId] = useState(categorias[0]?.id || '');
@@ -50,7 +54,7 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
   );
   const [observacoes, setObservacoes] = useState('');
 
-  // OCR Upload state
+  // Estados da leitura por IA
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrError, setOcrError] = useState<string | null>(null);
   const [ocrPreviewUrl, setOcrPreviewUrl] = useState<string | null>(null);
@@ -58,72 +62,179 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
 
   if (!isOpen) return null;
 
-  const cartaoSelecionado = cartoes.find((c) => c.id === cartaoId) || cartoes[0];
+  const cartaoSelecionado =
+    cartoes.find((c) => c.id === cartaoId) || cartoes[0];
+
   const calculoPrevia = cartaoSelecionado
-    ? calcularPrimeiraFatura(dataCompra, cartaoSelecionado.diaFechamento, cartaoSelecionado.diaVencimento)
+    ? calcularPrimeiraFatura(
+      dataCompra,
+      cartaoSelecionado.diaFechamento,
+      cartaoSelecionado.diaVencimento
+    )
     : null;
 
-  const valorParcelaPrevia = numParcelas > 0 ? (valorTotal / numParcelas).toFixed(2) : '0.00';
+  const valorParcelaPrevia =
+    numParcelas > 0 ? (valorTotal / numParcelas).toFixed(2) : '0.00';
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Leitura de comprovantes com autenticação
+  const handleFileUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = e.target.files?.[0];
+
     if (!file) return;
+
+    // Limite de tamanho: 10 MB
+    const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+    if (file.size > MAX_FILE_SIZE) {
+      setOcrError('O arquivo deve ter no máximo 10 MB.');
+      e.target.value = '';
+      return;
+    }
+
+    // Tipos de arquivo permitidos
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'application/pdf',
+    ];
+
+    if (!allowedTypes.includes(file.type)) {
+      setOcrError('Formato não permitido. Envie JPG, PNG, WEBP ou PDF.');
+      e.target.value = '';
+      return;
+    }
 
     setOcrLoading(true);
     setOcrError(null);
+    setOcrPreviewUrl(null);
 
     const reader = new FileReader();
-    reader.onload = async () => {
-      const base64Data = reader.result as string;
-      setOcrPreviewUrl(base64Data);
 
+    reader.onload = async () => {
       try {
+        const base64Data = reader.result as string;
+
+        if (!base64Data) {
+          throw new Error('Não foi possível ler o arquivo selecionado.');
+        }
+
+        setOcrPreviewUrl(base64Data);
+
+        // Verifica se existe uma sessão autenticada
+        const { data: sessionData, error: sessionError } =
+          await supabase.auth.getSession();
+
+        if (sessionError || !sessionData.session?.access_token) {
+          throw new Error(
+            'Você precisa estar autenticado para utilizar a leitura por IA.'
+          );
+        }
+
+        // Envia o comprovante junto com o token de autenticação
         const response = await fetch('/api/scan-receipt', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${sessionData.session.access_token}`,
+          },
           body: JSON.stringify({
             imageBase64: base64Data,
-            mimeType: file.type || 'image/jpeg',
+            mimeType: file.type,
           }),
         });
 
         const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.error || 'Não foi possível processar o comprovante.'
+          );
+        }
+
         if (data.success && data.extracted) {
           const ext = data.extracted;
-          if (ext.store) setEstabelecimento(ext.store);
-          if (ext.store && !descricao) setDescricao(`Compra ${ext.store}`);
-          if (ext.totalAmount) setValorTotal(Number(ext.totalAmount));
-          if (ext.purchaseDate) setDataCompra(ext.purchaseDate);
-          if (ext.installments) setNumParcelas(Math.max(1, Number(ext.installments)));
 
-          // Try matching category
-          if (ext.category) {
-            const matchedCat = categorias.find((c) =>
-              c.nome.toLowerCase().includes(ext.category.toLowerCase())
-            );
-            if (matchedCat) setCategoriaId(matchedCat.id);
+          if (ext.store) {
+            setEstabelecimento(ext.store);
           }
 
-          if (ext.notes) setObservacoes(ext.notes);
+          if (ext.store && !descricao) {
+            setDescricao(`Compra ${ext.store}`);
+          }
 
-          // Switch to manual form so user can review & adjust
+          if (ext.totalAmount) {
+            setValorTotal(Number(ext.totalAmount));
+          }
+
+          if (ext.purchaseDate) {
+            setDataCompra(ext.purchaseDate);
+          }
+
+          if (ext.installments) {
+            setNumParcelas(
+              Math.max(1, Number(ext.installments))
+            );
+          }
+
+          // Tenta identificar a categoria automaticamente
+          if (ext.category) {
+            const matchedCat = categorias.find((c) =>
+              c.nome
+                .toLowerCase()
+                .includes(String(ext.category).toLowerCase())
+            );
+
+            if (matchedCat) {
+              setCategoriaId(matchedCat.id);
+            }
+          }
+
+          if (ext.notes) {
+            setObservacoes(ext.notes);
+          }
+
+          // Retorna ao formulário para revisão dos dados
           setActiveTab('manual');
         } else {
-          setOcrError('Não foi possível extrair dados automáticos da imagem.');
+          setOcrError(
+            'Não foi possível extrair os dados automaticamente. Você pode preencher manualmente.'
+          );
         }
-      } catch (err: any) {
+      } catch (err) {
         console.error('OCR Error:', err);
-        setOcrError('Erro ao comunicar com o leitor inteligente por IA.');
+
+        setOcrError(
+          err instanceof Error
+            ? err.message
+            : 'Erro ao comunicar com o leitor inteligente por IA.'
+        );
       } finally {
         setOcrLoading(false);
+
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
       }
     };
+
+    reader.onerror = () => {
+      setOcrLoading(false);
+      setOcrError('Não foi possível ler o arquivo selecionado.');
+    };
+
     reader.readAsDataURL(file);
   };
 
+  // Salvar compra
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!descricao || valorTotal <= 0 || !calculoPrevia) return;
+
+    if (!descricao || valorTotal <= 0 || !calculoPrevia) {
+      return;
+    }
 
     onSalvarCompra({
       cartaoId,
@@ -136,20 +247,26 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
       primeiraFaturaMes: calculoPrevia.mesAnoFatura,
       observacoes,
     });
+
     onClose();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
       <div className="bg-white rounded-3xl max-w-xl w-full border border-slate-200/80 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Modal Header */}
+
+        {/* Cabeçalho */}
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <div className="flex items-center gap-2.5">
             <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
               <ShoppingBag className="h-5 w-5" />
             </div>
+
             <div>
-              <h3 className="text-base font-bold text-slate-900">Cadastrar Nova Compra</h3>
+              <h3 className="text-base font-bold text-slate-900">
+                Cadastrar Nova Compra
+              </h3>
+
               <p className="text-xs text-slate-500">
                 Preencha os dados ou faça a leitura do cupom fiscal via IA
               </p>
@@ -164,16 +281,15 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
           </button>
         </div>
 
-        {/* Tab switch: Manual vs OCR */}
+        {/* Alternância entre entrada manual e IA */}
         <div className="p-4 bg-slate-100/70 border-b border-slate-100 flex gap-2">
           <button
             type="button"
             onClick={() => setActiveTab('manual')}
-            className={`flex-1 py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
-              activeTab === 'manual'
+            className={`flex-1 py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all ${activeTab === 'manual'
                 ? 'bg-white text-indigo-700 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
-            }`}
+              }`}
           >
             <FileText className="h-4 w-4" />
             <span>1. Entrada Manual</span>
@@ -182,21 +298,20 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('ocr')}
-            className={`flex-1 py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
-              activeTab === 'ocr'
+            className={`flex-1 py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all ${activeTab === 'ocr'
                 ? 'bg-emerald-600 text-white shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
-            }`}
+              }`}
           >
             <Sparkles className="h-4 w-4 text-emerald-300" />
             <span>2. Leitura Inteligente por IA</span>
           </button>
         </div>
 
-        {/* Modal Content */}
+        {/* Conteúdo */}
         <div className="p-6 overflow-y-auto flex-1">
           {activeTab === 'ocr' ? (
-            /* OCR UPLOAD TAB */
+            /* Área de leitura por IA */
             <div className="space-y-4">
               <div
                 onClick={() => fileInputRef.current?.click()}
@@ -205,17 +320,20 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*,application/pdf"
+                  accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf"
                   className="hidden"
                   onChange={handleFileUpload}
+                  disabled={ocrLoading}
                 />
 
                 {ocrLoading ? (
                   <div className="flex flex-col items-center justify-center py-4 space-y-3">
                     <Loader2 className="h-10 w-10 text-emerald-600 animate-spin" />
+
                     <p className="text-sm font-semibold text-slate-800">
                       A Inteligência Artificial está lendo o comprovante...
                     </p>
+
                     <p className="text-xs text-slate-500">
                       Identificando loja, total, data e quantidade de parcelas
                     </p>
@@ -225,10 +343,14 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
                     <div className="p-3 bg-emerald-100 text-emerald-700 rounded-2xl group-hover:scale-110 transition-transform">
                       <Upload className="h-6 w-6" />
                     </div>
+
                     <p className="text-sm font-bold text-slate-800">
-                      Clique ou arraste a foto do cupom / comprovante
+                      Clique para selecionar o cupom ou comprovante
                     </p>
-                    <p className="text-xs text-slate-500">Formatos aceitos: JPG, PNG, PDF até 10MB</p>
+
+                    <p className="text-xs text-slate-500">
+                      Formatos aceitos: JPG, PNG, WEBP e PDF até 10 MB
+                    </p>
                   </div>
                 )}
               </div>
@@ -242,25 +364,28 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
 
               {ocrPreviewUrl && (
                 <div className="p-3 bg-slate-100 rounded-xl flex items-center justify-between text-xs text-slate-600">
-                  <span>Imagem selecionada pronta para análise</span>
+                  <span>Comprovante selecionado para análise</span>
+
                   <button
                     type="button"
                     onClick={() => setActiveTab('manual')}
                     className="text-indigo-600 font-semibold hover:underline"
                   >
-                    Ver dados extraídos no formulário &rarr;
+                    Ver dados extraídos no formulário →
                   </button>
                 </div>
               )}
             </div>
           ) : (
-            /* MANUAL FORM TAB */
+            /* Formulário manual */
             <form onSubmit={handleSubmit} className="space-y-4">
+
               {/* Descrição */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Nome / Descrição da Compra *
                 </label>
+
                 <input
                   type="text"
                   required
@@ -271,12 +396,13 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
                 />
               </div>
 
-              {/* Estabelecimento & Data */}
+              {/* Estabelecimento e data */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Loja / Estabelecimento
                   </label>
+
                   <input
                     type="text"
                     placeholder="Ex: Magazine Luiza, Amazon"
@@ -290,6 +416,7 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Data da Compra *
                   </label>
+
                   <input
                     type="date"
                     required
@@ -300,12 +427,13 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
                 </div>
               </div>
 
-              {/* Valor Total & Parcelas */}
+              {/* Valor e parcelas */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Valor Total (R$) *
                   </label>
+
                   <input
                     type="number"
                     step="0.01"
@@ -322,6 +450,7 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Quantidade de Parcelas *
                   </label>
+
                   <select
                     value={numParcelas}
                     onChange={(e) => setNumParcelas(Number(e.target.value))}
@@ -336,12 +465,13 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
                 </div>
               </div>
 
-              {/* Cartão e Categoria */}
+              {/* Cartão e categoria */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Cartão de Crédito *
                   </label>
+
                   <select
                     value={cartaoId}
                     onChange={(e) => setCartaoId(e.target.value)}
@@ -359,6 +489,7 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Categoria *
                   </label>
+
                   <select
                     value={categoriaId}
                     onChange={(e) => setCategoriaId(e.target.value)}
@@ -373,28 +504,37 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
                 </div>
               </div>
 
-              {/* Engine Preview Box */}
+              {/* Prévia das parcelas */}
               {calculoPrevia && valorTotal > 0 && (
                 <div className="p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-100 space-y-1 text-xs">
                   <div className="flex items-center justify-between text-indigo-900">
                     <span>Divisão das parcelas:</span>
+
                     <strong className="font-bold text-indigo-700">
-                      {numParcelas}x de {formatarMoeda(Number(valorParcelaPrevia))}
+                      {numParcelas}x de{' '}
+                      {formatarMoeda(Number(valorParcelaPrevia))}
                     </strong>
                   </div>
+
                   <div className="flex items-center justify-between text-indigo-900">
                     <span>Primeira fatura prevista:</span>
+
                     <span className="font-semibold text-slate-800">
-                      {calculoPrevia.mesAnoFatura} (Venc: {calculoPrevia.dataVencimentoReal})
+                      {calculoPrevia.mesAnoFatura} (Venc:{' '}
+                      {calculoPrevia.dataVencimentoReal})
                     </span>
                   </div>
+
                   <div className="text-[11px] text-slate-500 pt-1">
-                    Tempo até o 1º pagamento: <strong>{calculoPrevia.diasAteVencimento} dias</strong>.
+                    Tempo até o 1º pagamento:{' '}
+                    <strong>
+                      {calculoPrevia.diasAteVencimento} dias
+                    </strong>.
                   </div>
                 </div>
               )}
 
-              {/* Botões de Ação */}
+              {/* Botões */}
               <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-3">
                 <button
                   type="button"
@@ -403,6 +543,7 @@ export const NovaCompraModal: React.FC<NovaCompraModalProps> = ({
                 >
                   Cancelar
                 </button>
+
                 <button
                   type="submit"
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-600/20 active:scale-95"

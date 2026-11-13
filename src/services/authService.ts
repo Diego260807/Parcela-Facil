@@ -1,136 +1,13 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Cartao, Compra, SessaoAuth, Usuario, UsuarioComCredenciais } from '../types/finance';
-import { INITIAL_CARDS, INITIAL_PURCHASES, INITIAL_USER } from '../data/mockData';
+import { Cartao, Compra, Usuario } from '../types/finance';
+import { supabase } from '../lib/supabase';
 
-const KEY_USUARIOS_DB = 'pf_usuarios_db_v1';
-const KEY_SESSAO_ATIVA = 'pf_sessao_ativa_v1';
-
-// Função utilitária para hash simples e reversível de demonstração/local
-function simpleHash(senha: string): string {
-  let hash = 0;
-  for (let i = 0; i < senha.length; i++) {
-    const char = senha.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash |= 0;
-  }
-  return `hash_${Math.abs(hash)}_${senha.length * 7}`;
-}
-
-// Inicializar banco de usuários com a conta padrão caso esteja vazio
-function carregarUsuariosDb(): UsuarioComCredenciais[] {
-  const data = localStorage.getItem(KEY_USUARIOS_DB);
-  if (data) {
-    try {
-      return JSON.parse(data);
-    } catch {
-      // fallback
-    }
-  }
-
-  // Contas semente padrão
-  const usuariosPadrao: UsuarioComCredenciais[] = [
-    {
-      ...INITIAL_USER,
-      avatarCor: '#6366F1',
-      senhaHash: simpleHash('123456'), // Senha padrão de teste
-    },
-    {
-      id: 'usr-mariana',
-      nome: 'Mariana Silva',
-      email: 'mariana@exemplo.com.br',
-      rendaMensal: 6200.0,
-      tetoComprometimentoPercentual: 30.0,
-      criadoEm: '2026-02-01',
-      avatarCor: '#EC4899',
-      senhaHash: simpleHash('123456'),
-    },
-  ];
-
-  localStorage.setItem(KEY_USUARIOS_DB, JSON.stringify(usuariosPadrao));
-
-  // Inicializa dados isolados do usuário inicial se não existirem
-  const keyCartoesDiego = `pf_cartoes_${INITIAL_USER.id}`;
-  const keyComprasDiego = `pf_compras_${INITIAL_USER.id}`;
-  if (!localStorage.getItem(keyCartoesDiego)) {
-    localStorage.setItem(keyCartoesDiego, JSON.stringify(INITIAL_CARDS));
-  }
-  if (!localStorage.getItem(keyComprasDiego)) {
-    localStorage.setItem(keyComprasDiego, JSON.stringify(INITIAL_PURCHASES));
-  }
-
-  // Inicializa dados isolados para Mariana (outra conta com dados diferentes para testar isolamento)
-  const keyCartoesMariana = `pf_cartoes_usr-mariana`;
-  const keyComprasMariana = `pf_compras_usr-mariana`;
-  if (!localStorage.getItem(keyCartoesMariana)) {
-    const cartoesMariana: Cartao[] = [
-      {
-        id: 'card-inter-mariana',
-        nome: 'Inter Mastercard Gold',
-        banco: 'Banco Inter',
-        ultimosDigitos: '1244',
-        bandeira: 'mastercard',
-        limiteTotal: 7500.0,
-        diaFechamento: 15,
-        diaVencimento: 22,
-        corHex: '#EA580C',
-      },
-      {
-        id: 'card-c6-mariana',
-        nome: 'C6 Bank Carbon',
-        banco: 'C6 Bank',
-        ultimosDigitos: '7890',
-        bandeira: 'mastercard',
-        limiteTotal: 12000.0,
-        diaFechamento: 28,
-        diaVencimento: 5,
-        corHex: '#1E293B',
-      },
-    ];
-    localStorage.setItem(keyCartoesMariana, JSON.stringify(cartoesMariana));
-  }
-  if (!localStorage.getItem(keyComprasMariana)) {
-    const comprasMariana: Compra[] = [
-      {
-        id: 'compra-mar-1',
-        cartaoId: 'card-inter-mariana',
-        categoriaId: 'cat-casa',
-        descricao: 'Geladeira Frost Free Inox',
-        estabelecimento: 'Casas Bahia',
-        valorTotal: 3899.0,
-        quantidadeParcelas: 10,
-        dataCompra: '2026-10-10',
-        primeiraFaturaMes: '2026-10',
-        observacoes: 'Parcelamento sem juros',
-        criadoEm: '2026-10-10T12:00:00Z',
-      },
-      {
-        id: 'compra-mar-2',
-        cartaoId: 'card-c6-mariana',
-        categoriaId: 'cat-vestuario',
-        descricao: 'Vestido & Casaco de Lã',
-        estabelecimento: 'Zara Shopping',
-        valorTotal: 890.0,
-        quantidadeParcelas: 3,
-        dataCompra: '2026-10-29',
-        primeiraFaturaMes: '2026-11',
-        criadoEm: '2026-10-29T18:00:00Z',
-      },
-    ];
-    localStorage.setItem(keyComprasMariana, JSON.stringify(comprasMariana));
-  }
-
-  return usuariosPadrao;
-}
-
-function salvarUsuariosDb(usuarios: UsuarioComCredenciais[]): void {
-  localStorage.setItem(KEY_USUARIOS_DB, JSON.stringify(usuarios));
-}
-
-// ----------------- API / FUNÇÕES DE AUTENTICAÇÃO -----------------
+// ----------------- TIPOS -----------------
 
 export interface CadastroPayload {
   nome: string;
@@ -140,200 +17,446 @@ export interface CadastroPayload {
   tetoComprometimentoPercentual?: number;
 }
 
-export function cadastrarUsuario(payload: CadastroPayload): { sucesso: boolean; usuario?: Usuario; erro?: string } {
-  const usuarios = carregarUsuariosDb();
-  const emailNormalizado = payload.email.trim().toLowerCase();
+export interface ResultadoAuth {
+  sucesso: boolean;
+  usuario?: Usuario;
+  erro?: string;
+}
 
-  if (!payload.nome.trim()) {
+// ----------------- CONVERSÕES -----------------
+
+function converterPerfil(perfil: any): Usuario {
+  return {
+    id: perfil.id,
+    nome: perfil.nome,
+    email: perfil.email,
+    rendaMensal: Number(perfil.renda_mensal ?? 0),
+    tetoComprometimentoPercentual: Number(
+      perfil.teto_comprometimento_percentual ?? 35
+    ),
+    criadoEm: perfil.criado_em ?? new Date().toISOString(),
+    avatarCor: '#6366F1',
+  };
+}
+
+function converterCartao(row: any): Cartao {
+  return {
+    id: row.id,
+    nome: row.nome,
+    banco: row.banco ?? '',
+    ultimosDigitos: row.ultimos_digitos ?? '',
+    bandeira: row.bandeira ?? 'outro',
+    limiteTotal: Number(row.limite_total),
+    diaFechamento: Number(row.dia_fechamento ?? 1),
+    diaVencimento: Number(row.dia_vencimento ?? 1),
+    corHex: row.cor_hex ?? '#6366F1',
+  };
+}
+
+function converterCompra(row: any): Compra {
+  return {
+    id: row.id,
+    cartaoId: row.cartao_id ?? '',
+    categoriaId: row.categoria_id ?? '',
+    descricao: row.descricao,
+    estabelecimento: row.estabelecimento ?? '',
+    valorTotal: Number(row.valor_total),
+    quantidadeParcelas: Number(row.quantidade_parcelas),
+    dataCompra: row.data_compra ?? '',
+    primeiraFaturaMes: row.primeira_fatura_mes
+      ? String(row.primeira_fatura_mes).slice(0, 7)
+      : '',
+    observacoes: row.observacoes ?? '',
+    criadoEm: row.criado_em ?? new Date().toISOString(),
+  };
+}
+
+function converterMesParaData(mes: string): string | null {
+  if (!mes) return null;
+
+  return /^\d{4}-\d{2}$/.test(mes)
+    ? `${mes}-01`
+    : mes;
+}
+
+// ----------------- PERFIL -----------------
+
+async function buscarOuCriarPerfil(
+  userId: string,
+  dadosIniciais?: Partial<CadastroPayload>,
+  emailAuth?: string
+): Promise<Usuario> {
+  const { data: perfilExistente, error: erroBusca } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (erroBusca) {
+    throw erroBusca;
+  }
+
+  if (perfilExistente) {
+    return converterPerfil(perfilExistente);
+  }
+
+  const { data: authData } = await supabase.auth.getUser();
+  const usuarioAuth = authData.user;
+
+  const perfil = {
+    id: userId,
+    nome: dadosIniciais?.nome?.trim()
+      || usuarioAuth?.user_metadata?.nome
+      || 'Usuário',
+    email: emailAuth || usuarioAuth?.email || '',
+    renda_mensal: Number(dadosIniciais?.rendaMensal ?? 0),
+    teto_comprometimento_percentual: Number(
+      dadosIniciais?.tetoComprometimentoPercentual ?? 35
+    ),
+  };
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .upsert(perfil, { onConflict: 'id' })
+    .select()
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return converterPerfil(data);
+}
+
+// ----------------- AUTENTICAÇÃO -----------------
+
+export async function cadastrarUsuario(
+  payload: CadastroPayload
+): Promise<ResultadoAuth> {
+  const nome = payload.nome.trim();
+  const email = payload.email.trim().toLowerCase();
+
+  if (!nome) {
     return { sucesso: false, erro: 'O nome completo é obrigatório.' };
   }
-  if (!emailNormalizado || !emailNormalizado.includes('@')) {
+
+  if (!email || !email.includes('@')) {
     return { sucesso: false, erro: 'Informe um endereço de e-mail válido.' };
   }
+
   if (!payload.senha || payload.senha.length < 6) {
-    return { sucesso: false, erro: 'A senha deve ter no mínimo 6 caracteres.' };
+    return {
+      sucesso: false,
+      erro: 'A senha deve ter no mínimo 6 caracteres.',
+    };
   }
 
-  const jaExiste = usuarios.some((u) => u.email.toLowerCase() === emailNormalizado);
-  if (jaExiste) {
-    return { sucesso: false, erro: 'Este e-mail já está cadastrado. Tente entrar na sua conta.' };
+  if (Number(payload.rendaMensal) < 0) {
+    return { sucesso: false, erro: 'Informe uma renda válida.' };
   }
 
-  const coresAvatar = ['#6366F1', '#EC4899', '#10B981', '#3B82F6', '#8B5CF6', '#F59E0B'];
-  const corAleatoria = coresAvatar[Math.floor(Math.random() * coresAvatar.length)];
+  try {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password: payload.senha,
+      options: {
+        data: {
+          nome,
+          renda_mensal: Number(payload.rendaMensal) || 0,
+          teto_comprometimento_percentual:
+            Number(payload.tetoComprometimentoPercentual) || 35,
+        },
+      },
+    });
 
-  const novoUsuario: UsuarioComCredenciais = {
-    id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-    nome: payload.nome.trim(),
-    email: emailNormalizado,
-    rendaMensal: Number(payload.rendaMensal) || 0,
-    tetoComprometimentoPercentual: Number(payload.tetoComprometimentoPercentual) || 35.0,
-    criadoEm: new Date().toISOString(),
-    avatarCor: corAleatoria,
-    senhaHash: simpleHash(payload.senha),
-  };
+    if (error) {
+      return {
+        sucesso: false,
+        erro: error.message,
+      };
+    }
 
-  usuarios.push(novoUsuario);
-  salvarUsuariosDb(usuarios);
+    if (!data.user) {
+      return {
+        sucesso: false,
+        erro: 'Não foi possível criar sua conta.',
+      };
+    }
 
-  // Inicializa espaço de dados vazio e limpo para o novo usuário
-  const cartaoInicial: Cartao = {
-    id: `card_inicial_${novoUsuario.id}`,
-    nome: 'Meu Cartão Principal',
-    banco: 'Banco Principal',
-    ultimosDigitos: '1234',
-    bandeira: 'mastercard',
-    limiteTotal: 5000.0,
-    diaFechamento: 20,
-    diaVencimento: 27,
-    corHex: '#820AD1',
-  };
+    if (!data.session) {
+      return {
+        sucesso: false,
+        erro: 'Conta criada, mas não foi possível iniciar a sessão. Verifique a configuração de confirmação de e-mail no Supabase.',
+      };
+    }
 
-  localStorage.setItem(`pf_cartoes_${novoUsuario.id}`, JSON.stringify([cartaoInicial]));
-  localStorage.setItem(`pf_compras_${novoUsuario.id}`, JSON.stringify([]));
+    const usuario = await buscarOuCriarPerfil(
+      data.user.id,
+      payload,
+      email
+    );
 
-  // Efetua login automático
-  const sessao: SessaoAuth = {
-    token: `token_${novoUsuario.id}_${Date.now()}`,
-    usuario: {
-      id: novoUsuario.id,
-      nome: novoUsuario.nome,
-      email: novoUsuario.email,
-      rendaMensal: novoUsuario.rendaMensal,
-      tetoComprometimentoPercentual: novoUsuario.tetoComprometimentoPercentual,
-      criadoEm: novoUsuario.criadoEm,
-      avatarCor: novoUsuario.avatarCor,
-    },
-    expiraEm: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-  };
+    return { sucesso: true, usuario };
+  } catch (error) {
+    console.error('Erro ao cadastrar usuário:', error);
 
-  localStorage.setItem(KEY_SESSAO_ATIVA, JSON.stringify(sessao));
-
-  return { sucesso: true, usuario: sessao.usuario };
+    return {
+      sucesso: false,
+      erro: 'Não foi possível concluir o cadastro. Tente novamente.',
+    };
+  }
 }
 
-export function fazerLogin(email: string, senha: string): { sucesso: boolean; usuario?: Usuario; erro?: string } {
-  const usuarios = carregarUsuariosDb();
+export async function fazerLogin(
+  email: string,
+  senha: string
+): Promise<ResultadoAuth> {
   const emailNormalizado = email.trim().toLowerCase();
 
-  const usuarioEncontrado = usuarios.find((u) => u.email.toLowerCase() === emailNormalizado);
-  if (!usuarioEncontrado) {
-    return { sucesso: false, erro: 'E-mail ou senha incorretos. Verifique suas credenciais.' };
+  if (!emailNormalizado || !senha) {
+    return {
+      sucesso: false,
+      erro: 'Informe seu e-mail e sua senha.',
+    };
   }
 
-  const hashDigitado = simpleHash(senha);
-  if (usuarioEncontrado.senhaHash !== hashDigitado) {
-    return { sucesso: false, erro: 'E-mail ou senha incorretos. Verifique suas credenciais.' };
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: emailNormalizado,
+      password: senha,
+    });
+
+    if (error) {
+      return {
+        sucesso: false,
+        erro: 'E-mail ou senha incorretos. Verifique suas credenciais.',
+      };
+    }
+
+    if (!data.user) {
+      return {
+        sucesso: false,
+        erro: 'Não foi possível identificar sua conta.',
+      };
+    }
+
+    const usuario = await buscarOuCriarPerfil(
+      data.user.id,
+      undefined,
+      data.user.email
+    );
+
+    return { sucesso: true, usuario };
+  } catch (error) {
+    console.error('Erro ao fazer login:', error);
+
+    return {
+      sucesso: false,
+      erro: 'Não foi possível entrar. Tente novamente.',
+    };
   }
-
-  const usuarioSemHash: Usuario = {
-    id: usuarioEncontrado.id,
-    nome: usuarioEncontrado.nome,
-    email: usuarioEncontrado.email,
-    rendaMensal: usuarioEncontrado.rendaMensal,
-    tetoComprometimentoPercentual: usuarioEncontrado.tetoComprometimentoPercentual,
-    criadoEm: usuarioEncontrado.criadoEm,
-    avatarCor: usuarioEncontrado.avatarCor || '#6366F1',
-  };
-
-  const sessao: SessaoAuth = {
-    token: `token_${usuarioEncontrado.id}_${Date.now()}`,
-    usuario: usuarioSemHash,
-    expiraEm: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-  };
-
-  localStorage.setItem(KEY_SESSAO_ATIVA, JSON.stringify(sessao));
-
-  return { sucesso: true, usuario: usuarioSemHash };
 }
 
-export function obterSessaoAtiva(): Usuario | null {
-  const data = localStorage.getItem(KEY_SESSAO_ATIVA);
-  if (!data) return null;
+export async function obterSessaoAtiva(): Promise<Usuario | null> {
   try {
-    const sessao: SessaoAuth = JSON.parse(data);
-    // Verifica validade da data de expiração
-    if (new Date(sessao.expiraEm).getTime() < Date.now()) {
-      localStorage.removeItem(KEY_SESSAO_ATIVA);
+    const { data, error } = await supabase.auth.getSession();
+
+    if (error || !data.session?.user) {
       return null;
     }
-    return sessao.usuario;
-  } catch {
+
+    return await buscarOuCriarPerfil(
+      data.session.user.id,
+      undefined,
+      data.session.user.email
+    );
+  } catch (error) {
+    console.error('Erro ao recuperar sessão:', error);
     return null;
   }
 }
 
-export function fazerLogout(): void {
-  localStorage.removeItem(KEY_SESSAO_ATIVA);
-}
+export async function fazerLogout(): Promise<void> {
+  const { error } = await supabase.auth.signOut();
 
-// ----------------- GESTÃO ISOLADA DE DADOS POR USUÁRIO -----------------
-
-export function carregarCartoesDoUsuario(userId: string): Cartao[] {
-  const key = `pf_cartoes_${userId}`;
-  const data = localStorage.getItem(key);
-  if (data) {
-    try {
-      return JSON.parse(data);
-    } catch {
-      // fallback
-    }
+  if (error) {
+    throw error;
   }
-  // Se for o usuário padrão e ainda não existia
-  if (userId === INITIAL_USER.id) {
-    localStorage.setItem(key, JSON.stringify(INITIAL_CARDS));
-    return INITIAL_CARDS;
+}
+
+// ----------------- CARTÕES -----------------
+
+export async function carregarCartoesDoUsuario(
+  userId: string
+): Promise<Cartao[]> {
+  const { data, error } = await supabase
+    .from('cards')
+    .select('*')
+    .eq('user_id', userId)
+    .order('criado_em', { ascending: true });
+
+  if (error) {
+    throw error;
   }
-  return [];
+
+  return (data ?? []).map(converterCartao);
 }
 
-export function salvarCartoesDoUsuario(userId: string, cartoes: Cartao[]): void {
-  localStorage.setItem(`pf_cartoes_${userId}`, JSON.stringify(cartoes));
-}
+export async function salvarCartoesDoUsuario(
+  userId: string,
+  cartoes: Cartao[]
+): Promise<void> {
+  if (!cartoes.length) {
+    const { error } = await supabase
+      .from('cards')
+      .delete()
+      .eq('user_id', userId);
 
-export function carregarComprasDoUsuario(userId: string): Compra[] {
-  const key = `pf_compras_${userId}`;
-  const data = localStorage.getItem(key);
-  if (data) {
-    try {
-      return JSON.parse(data);
-    } catch {
-      // fallback
-    }
+    if (error) throw error;
+    return;
   }
-  if (userId === INITIAL_USER.id) {
-    localStorage.setItem(key, JSON.stringify(INITIAL_PURCHASES));
-    return INITIAL_PURCHASES;
+
+  const registros = cartoes.map((cartao) => ({
+    id: cartao.id,
+    user_id: userId,
+    nome: cartao.nome,
+    banco: cartao.banco,
+    ultimos_digitos: cartao.ultimosDigitos,
+    bandeira: cartao.bandeira,
+    limite_total: cartao.limiteTotal,
+    dia_fechamento: cartao.diaFechamento,
+    dia_vencimento: cartao.diaVencimento,
+    cor_hex: cartao.corHex,
+  }));
+
+  const { error } = await supabase
+    .from('cards')
+    .upsert(registros, { onConflict: 'id' });
+
+  if (error) throw error;
+
+  // Remove somente cartões deste usuário que não estão mais na lista.
+  const idsAtuais = cartoes.map((cartao) => cartao.id);
+
+  const { data: existentes, error: erroBusca } = await supabase
+    .from('cards')
+    .select('id')
+    .eq('user_id', userId);
+
+  if (erroBusca) throw erroBusca;
+
+  const idsRemover = (existentes ?? [])
+    .map((item) => item.id)
+    .filter((id) => !idsAtuais.includes(id));
+
+  for (const id of idsRemover) {
+    const { error: erroDelete } = await supabase
+      .from('cards')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId);
+
+    if (erroDelete) throw erroDelete;
   }
-  return [];
 }
 
-export function salvarComprasDoUsuario(userId: string, compras: Compra[]): void {
-  localStorage.setItem(`pf_compras_${userId}`, JSON.stringify(compras));
+// ----------------- COMPRAS -----------------
+
+export async function carregarComprasDoUsuario(
+  userId: string
+): Promise<Compra[]> {
+  const { data, error } = await supabase
+    .from('purchases')
+    .select('*')
+    .eq('user_id', userId)
+    .order('criado_em', { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map(converterCompra);
 }
 
-export function atualizarPerfilUsuario(usuarioAtualizado: Usuario): void {
-  const usuarios = carregarUsuariosDb();
-  const idx = usuarios.findIndex((u) => u.id === usuarioAtualizado.id);
-  if (idx !== -1) {
-    usuarios[idx] = {
-      ...usuarios[idx],
+export async function salvarComprasDoUsuario(
+  userId: string,
+  compras: Compra[]
+): Promise<void> {
+  if (!compras.length) {
+    const { error } = await supabase
+      .from('purchases')
+      .delete()
+      .eq('user_id', userId);
+
+    if (error) throw error;
+    return;
+  }
+
+  const registros = compras.map((compra) => ({
+    id: compra.id,
+    user_id: userId,
+    cartao_id: compra.cartaoId || null,
+    categoria_id: compra.categoriaId || null,
+    descricao: compra.descricao,
+    estabelecimento: compra.estabelecimento || null,
+    valor_total: compra.valorTotal,
+    quantidade_parcelas: compra.quantidadeParcelas,
+    data_compra: compra.dataCompra || null,
+    primeira_fatura_mes: converterMesParaData(
+      compra.primeiraFaturaMes
+    ),
+    observacoes: compra.observacoes || null,
+    criado_em: compra.criadoEm,
+  }));
+
+  const { error } = await supabase
+    .from('purchases')
+    .upsert(registros, { onConflict: 'id' });
+
+  if (error) throw error;
+
+  // Remove somente compras deste usuário que não estão mais na lista.
+  const idsAtuais = compras.map((compra) => compra.id);
+
+  const { data: existentes, error: erroBusca } = await supabase
+    .from('purchases')
+    .select('id')
+    .eq('user_id', userId);
+
+  if (erroBusca) throw erroBusca;
+
+  const idsRemover = (existentes ?? [])
+    .map((item) => item.id)
+    .filter((id) => !idsAtuais.includes(id));
+
+  for (const id of idsRemover) {
+    const { error: erroDelete } = await supabase
+      .from('purchases')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId);
+
+    if (erroDelete) throw erroDelete;
+  }
+}
+
+// ----------------- ATUALIZAÇÃO DO PERFIL -----------------
+
+export async function atualizarPerfilUsuario(
+  usuarioAtualizado: Usuario
+): Promise<void> {
+  const { error } = await supabase
+    .from('profiles')
+    .update({
       nome: usuarioAtualizado.nome,
-      rendaMensal: usuarioAtualizado.rendaMensal,
-      tetoComprometimentoPercentual: usuarioAtualizado.tetoComprometimentoPercentual,
-    };
-    salvarUsuariosDb(usuarios);
-  }
+      email: usuarioAtualizado.email,
+      renda_mensal: usuarioAtualizado.rendaMensal,
+      teto_comprometimento_percentual:
+        usuarioAtualizado.tetoComprometimentoPercentual,
+    })
+    .eq('id', usuarioAtualizado.id);
 
-  const sessaoAtual = obterSessaoAtiva();
-  if (sessaoAtual && sessaoAtual.id === usuarioAtualizado.id) {
-    localStorage.setItem(
-      KEY_SESSAO_ATIVA,
-      JSON.stringify({
-        token: `token_${usuarioAtualizado.id}`,
-        usuario: usuarioAtualizado,
-        expiraEm: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      })
-    );
+  if (error) {
+    throw error;
   }
 }
